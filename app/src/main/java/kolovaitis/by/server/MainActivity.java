@@ -16,6 +16,7 @@ import android.os.Bundle;
 
 import android.provider.MediaStore;
 import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -25,31 +26,41 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.android.volley.AuthFailureError;
 import com.android.volley.Request;
 import com.android.volley.RequestQueue;
 import com.android.volley.Response;
 import com.android.volley.VolleyError;
 import com.android.volley.toolbox.ImageRequest;
 import com.android.volley.toolbox.JsonObjectRequest;
+import com.android.volley.toolbox.StringRequest;
 import com.android.volley.toolbox.Volley;
-import com.couchbase.lite.CouchbaseLiteException;
-import com.couchbase.lite.Database;
-import com.couchbase.lite.Document;
-import com.couchbase.lite.Manager;
-import com.couchbase.lite.UnsavedRevision;
 
+
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.mime.MultipartEntityBuilder;
+import org.apache.http.impl.client.DefaultHttpClient;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
@@ -59,7 +70,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST = 1;
     private ImageView image;
     public static String atId;
-
+    public String rev;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -110,7 +121,7 @@ public class MainActivity extends AppCompatActivity {
                             Toast.makeText(MainActivity.this, response.toString(), Toast.LENGTH_LONG).show();
                             String newId = atVal.substring(2, atVal.indexOf(".") + 4);
                             String url = "http://46.101.205.23:4444/test_db/" + id + "/" + newId;
-                            atId = id ;
+                            atId = id;
                             ImageRequest ir = new ImageRequest(url, new Response.Listener<Bitmap>() {
 
 
@@ -254,7 +265,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    protected void onActivityResult(int requestCode, int resultCode, final Intent data) {
 
         Bitmap img = BitmapFactory.decodeResource(getResources(),R.drawable.error);
 
@@ -274,7 +285,7 @@ public class MainActivity extends AppCompatActivity {
         l.setOrientation(LinearLayout.VERTICAL);
         ScrollView v = new ScrollView(MainActivity.this);
         final EditText et = new EditText(MainActivity.this);
-        if (!atId.equals("")) {
+        if (atId.equals("")) {
 
             et.setText(atId);
             et.setTextSize(32);
@@ -301,13 +312,14 @@ public class MainActivity extends AppCompatActivity {
                 .setNeutralButton("ok",
                         new DialogInterface.OnClickListener() {
                             public void onClick(DialogInterface dialog, int id) {
+                                Uri fullPhotoUri = data.getData();
                                 try {
-                                    send(finalImg,et.getText().toString());
-                                } catch (CouchbaseLiteException e) {
-                                    e.printStackTrace();
-                                }
+                                    InputStream iStream = getContentResolver().openInputStream(fullPhotoUri);
 
-                                Toast.makeText(MainActivity.this, "Don't work!", Toast.LENGTH_LONG).show();
+                                    send(iStream, et.getText().toString());
+                                }catch(Exception e){}
+
+
                                 dialog.cancel();
                             }
                         });
@@ -360,22 +372,91 @@ public class MainActivity extends AppCompatActivity {
         else
             return false;
     }
-    public void send(Bitmap bmp ,String id) throws CouchbaseLiteException {
-      Document document=new Document(new Database("https://example.com/mydatabase/",null),id);
+   public void send(InputStream is ,String id) {
+       rev="";
+       RequestQueue queue = Volley.newRequestQueue(this);
+       String url = "http://46.101.205.23:4444/test_db/" +id;
+       final String sb=getIntent().getStringExtra("ForError");
+       JsonObjectRequest jsObjRequest = new JsonObjectRequest(Request.Method.GET, url, null, new Response.Listener<JSONObject>() {
+
+           @Override
+           public void onResponse(JSONObject response) {
+               String rev2 = null;
+               try {
+                  rev2 =response.getString("_rev");
+
+               } catch (JSONException e) {
+                   e.printStackTrace();
+               }
+rev=rev2;
+Toast.makeText(MainActivity.this,rev2,Toast.LENGTH_LONG).show();
+           }
+       }, new Response.ErrorListener() {
+
+           @Override
+           public void onErrorResponse(VolleyError error) {
+
+           }
+       });
+
+       queue.add(jsObjRequest);
 
 
 
-attachImage(document,bmp);
+
+
+
+
+       try {
+           String url1 = "http://46.101.205.23:4444/test_db/" + id+"/picture.png";
+
+
+           final byte[] photoBytes = getBytes(is);
+
+           RequestQueue queue1 = Volley.newRequestQueue(this);
+
+           StringRequest stringRequest = new StringRequest(Request.Method.PUT, url1,
+                   new Response.Listener<String>() {
+                       @Override
+                       public void onResponse(String response) {
+                           Toast toast = Toast.makeText(getApplicationContext(), "Response is: " + response, Toast.LENGTH_LONG);
+                           toast.show();
+                       }
+                   },
+                   new Response.ErrorListener() {
+                       @Override
+                       public void onErrorResponse(VolleyError error) {
+                           Toast toast = Toast.makeText(getApplicationContext(), rev+"Error: " + error.toString(), Toast.LENGTH_LONG);
+                           toast.show();
+                       }
+                   }) {
+               @Override
+               public byte[] getBody() throws AuthFailureError {
+                   return photoBytes;
+               }
+           };
+           queue1.add(stringRequest);
+
+
+        }catch (Exception e ){}
+
+   }
+
+    private byte[] getBytes(InputStream inputStream) throws IOException {
+        ByteArrayOutputStream byteBuffer = new ByteArrayOutputStream();
+        int bufferSize = 1024;
+        byte[] buffer = new byte[bufferSize];
+
+        int len = 0;
+        while ((len = inputStream.read(buffer)) != -1) {
+            byteBuffer.write(buffer, 0, len);
+        }
+        return byteBuffer.toByteArray();
     }
-    public static void attachImage(com.couchbase.lite.Document task, Bitmap image) throws CouchbaseLiteException {
-        if (task == null || image == null) return;
-        UnsavedRevision revision = task.createRevision();
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        image.compress(Bitmap.CompressFormat.JPEG, 50, out);
-        ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
-        revision.setAttachment("image", "image/jpg", in);
-        revision.save();
-    }
+
+
+
+
 
 
 }
